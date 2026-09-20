@@ -4,7 +4,7 @@
 .codex
 .vscode
 **/node_modules
-**/dist
+backend/dist
 **/.env
 **/.env.*
 **/*.log
