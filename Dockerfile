@@ -1,7 +1,9 @@
 FROM node:24.18-trixie-slim AS frontend-build
 WORKDIR /opt/frontend
 COPY frontend/package*.json ./
-RUN npm ci --no-audit --no-fund
+RUN npm ci --ignore-scripts --no-audit --no-fund \
+    --fetch-retries=5 --fetch-retry-factor=2 --fetch-retry-mintimeout=20000 \
+    --fetch-retry-maxtimeout=120000
 COPY frontend/ .
 RUN npm run start:build
 
