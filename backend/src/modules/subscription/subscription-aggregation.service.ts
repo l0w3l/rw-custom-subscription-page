@@ -2,14 +2,16 @@ import type { IncomingHttpHeaders } from 'node:http';
 
 import { Injectable, Logger } from '@nestjs/common';
 
-import { GetUserByShortUuidCommand, TRequestTemplateTypeKeys } from '@remnawave/backend-contract';
+import { TRequestTemplateTypeKeys } from '@remnawave/backend-contract';
 
+import { AggregationUser } from '@common/axios/aggregation-user.schema';
 import { AxiosService } from '@common/axios/axios.service';
 import { TypedConfigService } from '@common/config/app-config';
 
+import { describeAggregationError } from './aggregation-error';
 import { detectSubscriptionFormat, mergeSubscriptionBodies } from './subscription-merger';
 
-type User = GetUserByShortUuidCommand.Response['response'];
+type User = AggregationUser;
 type Subscription = NonNullable<Awaited<ReturnType<AxiosService['getSubscription']>>>;
 
 function isDeviceBlocked(subscription: Subscription): boolean {
@@ -62,6 +64,10 @@ export class SubscriptionAggregationService {
         const format = detectSubscriptionFormat(original.subscription);
         if (!format) return original;
 
+        let stage = 'get-primary-user';
+        let subscriptionIndex: number | undefined;
+        let activeSubscriptions: number | undefined;
+        let receivedFormat: string | undefined;
         try {
             const primary = await this.axiosService.getUserByShortUuid(clientIp, shortUuid);
             if (
@@ -72,6 +78,7 @@ export class SubscriptionAggregationService {
                 primary.telegramId < 0
             )
                 return original;
+            stage = 'get-related-users';
             const users = prioritizeSubscriptions(
                 await this.axiosService.getUsersByTelegramId(clientIp, primary.telegramId),
                 primary,
@@ -79,9 +86,12 @@ export class SubscriptionAggregationService {
             if (!users.length || (users.length === 1 && users[0].shortUuid === shortUuid))
                 return original;
 
+            activeSubscriptions = users.length;
             const subscriptions: Subscription[] = [];
             // Sequential fetches bound panel load and preserve the priority order.
             for (const user of users) {
+                stage = 'fetch-subscription';
+                subscriptionIndex = subscriptions.length + 1;
                 const subscription =
                     user.shortUuid === shortUuid
                         ? original
@@ -91,12 +101,19 @@ export class SubscriptionAggregationService {
                               headers,
                               !!clientType,
                               clientType,
+                              true,
                           );
                 if (!subscription) throw new Error('A subscription could not be fetched');
                 if (isDeviceBlocked(subscription))
                     throw new Error('A subscription is device restricted');
+                stage = 'check-format';
+                receivedFormat = detectSubscriptionFormat(subscription.subscription) ?? 'unknown';
+                if (receivedFormat !== format) throw new Error('Subscription format mismatch');
                 subscriptions.push(subscription);
             }
+            stage = 'merge';
+            subscriptionIndex = undefined;
+            receivedFormat = undefined;
             const subscription = mergeSubscriptionBodies(
                 subscriptions.map((entry) => entry.subscription),
                 format,
@@ -129,10 +146,18 @@ export class SubscriptionAggregationService {
                 `upload=0; download=${used}; total=${total}; expire=${expire}`;
             resultHeaders['cache-control'] = 'no-store';
             return { subscription, headers: resultHeaders };
-        } catch {
+        } catch (error) {
             // Do not log Axios errors: they can contain API tokens and subscription credentials.
             this.logger.warn(
-                'Subscription aggregation failed; returning the original panel response',
+                'Subscription aggregation failed; returning the original panel response ' +
+                    JSON.stringify({
+                        stage,
+                        format,
+                        activeSubscriptions,
+                        subscriptionIndex,
+                        receivedFormat,
+                        ...describeAggregationError(error),
+                    }),
             );
             return original;
         }

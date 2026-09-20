@@ -7,7 +7,9 @@ const {
     isActiveSubscription,
 } = require('../src/modules/subscription/subscription-aggregation.service.ts');
 const { AxiosService } = require('../src/common/axios/axios.service.ts');
-const { GetUsersStreamCommand } = require('@remnawave/backend-contract');
+const { AxiosError } = require('axios');
+const { GetUserByShortUuidCommand, GetUsersStreamCommand } = require('@remnawave/backend-contract');
+const { aggregationUserResponseSchema } = require('../src/common/axios/aggregation-user.schema.ts');
 const user = (id, overrides = {}) => ({
     id,
     shortUuid: `user-${id}`,
@@ -33,6 +35,7 @@ const original = () => ({
 });
 function setup(primary = user(2), users = [user(1), primary], enabled = true) {
     const calls = [];
+    const warnings = [];
     const axios = {
         getUserByShortUuid: async (...args) => {
             calls.push(['user', ...args]);
@@ -48,8 +51,8 @@ function setup(primary = user(2), users = [user(1), primary], enabled = true) {
         },
     };
     const service = new SubscriptionAggregationService(axios, { get: () => enabled });
-    service.logger = { warn: () => {} };
-    return { service, axios, calls };
+    service.logger = { warn: (message) => warnings.push(message) };
+    return { service, axios, calls, warnings };
 }
 const requestHeaders = { 'user-agent': 'v2rayNG', 'x-hwid': 'device' };
 const run = (service, response = original()) =>
@@ -87,7 +90,7 @@ test('aggregation preserves client headers, profile metadata and sums quota', as
     assert.equal(result.headers['content-length'], undefined);
     assert.deepEqual(
         calls.find((c) => c[0] === 'subscription'),
-        ['subscription', '127.0.0.2', 'user-1', requestHeaders, false, undefined],
+        ['subscription', '127.0.0.2', 'user-1', requestHeaders, false, undefined, true],
     );
 });
 
@@ -147,7 +150,7 @@ test('lookup, subscription and format failures fall back without leaking partial
 test('explicit client type is forwarded and unlimited account makes aggregate unlimited', async () => {
     const { service, calls } = setup(user(2), [user(1, { trafficLimitBytes: 0 })]);
     const result = await service.aggregate(original(), 'ip', 'user-2', requestHeaders, 'clash');
-    assert.deepEqual(calls.find((c) => c[0] === 'subscription').slice(-2), [true, 'clash']);
+    assert.deepEqual(calls.find((c) => c[0] === 'subscription').slice(-3), [true, 'clash', true]);
     assert.match(result.headers['subscription-userinfo'], /total=0;/);
 });
 
@@ -221,4 +224,150 @@ test('API rejects repeated pagination cursor', async () => {
         }),
     };
     await assert.rejects(service.getUsersByTelegramId('ip', 123), /cursor/);
+});
+
+test('Remnawave 3.4.4 non-RFC VLESS UUIDs do not prevent user lookup or aggregation', async () => {
+    // api-1.json UserResponseDto / GetUsersStreamResponseDto allow any hex UUID,
+    // unlike the RFC version/variant restriction in backend-contract 3.1.1.
+    const primary = { ...apiUser(2), vlessUuid: '11111111-1111-0111-0111-111111111111' };
+    const secondary = { ...apiUser(1), vlessUuid: '22222222-2222-f222-0222-222222222222' };
+    assert.equal(
+        GetUserByShortUuidCommand.ResponseSchema.safeParse({ response: primary }).success,
+        false,
+    );
+    const axios = Object.create(AxiosService.prototype);
+    const requests = [];
+    axios.axiosInstance = {
+        request: async (request) => {
+            requests.push(request);
+            if (request.url === GetUserByShortUuidCommand.url('user-2'))
+                return { data: { response: primary } };
+            if (request.url === GetUsersStreamCommand.url)
+                return {
+                    data: {
+                        response: {
+                            users: [secondary, primary],
+                            hasMore: false,
+                            nextCursor: null,
+                        },
+                    },
+                };
+            assert.equal(request.url, 'api/sub/user-1');
+            return {
+                data: body('secondary', 'other-host'),
+                headers: { 'content-type': 'text/plain' },
+            };
+        },
+    };
+    const service = new SubscriptionAggregationService(axios, { get: () => true });
+    const warnings = [];
+    service.logger = { warn: (message) => warnings.push(message) };
+    const result = await run(service);
+    assert.equal(requests.length, 3);
+    assert.equal(
+        result.subscription.toString(),
+        body('primary').toString() + '\n' + body('secondary', 'other-host').toString(),
+    );
+    assert.deepEqual(warnings, []);
+});
+
+test('aggregation validates required account data without retaining unused credentials', () => {
+    const response = { response: apiUser(2) };
+    const parsed = aggregationUserResponseSchema.parse(response).response;
+    assert.equal(parsed.vlessUuid, undefined);
+    assert.equal(parsed.trojanPassword, undefined);
+    assert.equal(parsed.ssPassword, undefined);
+    for (const key of [
+        'shortUuid',
+        'telegramId',
+        'expireAt',
+        'createdAt',
+        'status',
+        'trafficLimitBytes',
+        'userTraffic',
+    ]) {
+        const invalid = structuredClone(response);
+        delete invalid.response[key];
+        assert.equal(aggregationUserResponseSchema.safeParse(invalid).success, false, key);
+    }
+});
+
+test('HTTP errors report stage and status without tokens, URLs, identifiers or response body', async () => {
+    for (const stage of ['get-primary-user', 'get-related-users', 'fetch-subscription']) {
+        const { service, axios, warnings } = setup();
+        const secret = 'DO-NOT-LOG-token-or-body';
+        const error = new AxiosError(
+            secret,
+            'ERR_BAD_REQUEST',
+            {
+                url: 'https://panel.example/' + secret,
+                headers: { Authorization: secret },
+            },
+            undefined,
+            { status: 403, data: secret },
+        );
+        const throwError = async () => {
+            throw error;
+        };
+        if (stage === 'get-primary-user') axios.getUserByShortUuid = throwError;
+        if (stage === 'get-related-users') axios.getUsersByTelegramId = throwError;
+        if (stage === 'fetch-subscription') axios.getSubscription = throwError;
+        const source = original();
+        assert.equal(await run(service, source), source);
+        assert.equal(warnings.length, 1);
+        assert.match(warnings[0], new RegExp(`"stage":"${stage}"`));
+        assert.match(warnings[0], /"reason":"panel_request_failed"/);
+        assert.match(warnings[0], /"httpStatus":403/);
+        assert.equal(warnings[0].includes(secret), false);
+        assert.equal(warnings[0].includes('user-'), false);
+    }
+});
+
+test('invalid schema logs field names only', async () => {
+    const { service, axios, warnings } = setup();
+    axios.getUserByShortUuid = async () =>
+        aggregationUserResponseSchema.parse({
+            response: { ...apiUser(2), telegramId: 'DO-NOT-LOG-private-data' },
+        });
+    const source = original();
+    assert.equal(await run(service, source), source);
+    assert.match(warnings[0], /"reason":"invalid_panel_response"/);
+    assert.match(warnings[0], /response.telegramId/);
+    assert.equal(warnings[0].includes('DO-NOT-LOG'), false);
+});
+
+test('format and HWID diagnostics identify the secondary subscription by position', async () => {
+    for (const mode of ['format', 'hwid']) {
+        const { service, axios, warnings } = setup();
+        axios.getSubscription = async () => ({
+            subscription:
+                mode === 'format' ? Buffer.from('happ://crypt/DO-NOT-LOG') : body('secret'),
+            headers: mode === 'hwid' ? { 'x-hwid-limit': 'true' } : {},
+        });
+        await run(service);
+        assert.match(warnings[0], /"subscriptionIndex":2/);
+        assert.match(warnings[0], /"activeSubscriptions":2/);
+        assert.match(
+            warnings[0],
+            mode === 'format' ? /"reason":"format_mismatch"/ : /"reason":"hwid_restricted"/,
+        );
+        assert.equal(warnings[0].includes('DO-NOT-LOG'), false);
+    }
+});
+
+test('subscription fetch preserves HTTP errors for aggregation and default 404 behavior', async () => {
+    const axios = Object.create(AxiosService.prototype);
+    const error = new AxiosError('secret', 'ERR_BAD_REQUEST', undefined, undefined, {
+        status: 404,
+    });
+    axios.axiosInstance = {
+        request: async () => {
+            throw error;
+        },
+    };
+    assert.equal(await axios.getSubscription('ip', 'short', {}, false), null);
+    await assert.rejects(
+        axios.getSubscription('ip', 'short', {}, false, undefined, true),
+        (caught) => caught === error,
+    );
 });

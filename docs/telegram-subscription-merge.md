@@ -43,6 +43,24 @@ HTML-страница и её карточка статистики показы
 
 ## Проверка
 
+Если появляется `Subscription aggregation failed`, строка лога содержит JSON с этапом
+`stage` и причиной `reason`. Токены, Telegram ID, идентификаторы подписок, тела ответов
+и ключи прокси не выводятся. `subscriptionIndex` — позиция подписки в порядке приоритета,
+начиная с 1, а `activeSubscriptions` — количество активных подписок.
+
+- `panel_request_failed` и `httpStatus: 401/403`: проверить API-токен и его права на
+  endpoints пользователей. На этапе `fetch-subscription` проверяйте доступ к endpoint
+  подписки и правила панели для клиента.
+- `invalid_panel_response` и `fields`: ответ API не содержит корректных данных в
+  перечисленных полях. Теперь проверяются только данные, необходимые для объединения;
+  формат `vlessUuid` из Remnawave 3.4.4 не проверяется старой схемой SDK 3.1.1.
+- `format_mismatch`: исходная и связанная подписки отданы в разных форматах.
+  В логе указаны ожидаемый `format` и `receivedFormat`; проверьте шаблоны/SRR для аккаунтов.
+- `hwid_restricted`: панель запретила связанную подписку этому устройству.
+- `conflicting_external_providers` или `conflicting_dialer_proxy`: конфликт шаблонов Mihomo.
+
+Пример диагностического сообщения: `{"stage":"get-related-users","format":"mihomo","reason":"panel_request_failed","httpStatus":403}`.
+
 ```sh
 cd backend
 npm ci

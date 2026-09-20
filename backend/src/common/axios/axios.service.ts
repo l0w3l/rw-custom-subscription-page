@@ -23,6 +23,11 @@ import { TypedConfigService } from '@common/config/app-config';
 import { IGNORED_HEADERS } from '@common/constants';
 
 import { ICommandResponse } from '../types/command-response.type';
+import {
+    AggregationUser,
+    aggregationUserResponseSchema,
+    aggregationUsersPageSchema,
+} from './aggregation-user.schema';
 
 @Injectable()
 export class AxiosService implements OnModuleInit {
@@ -286,11 +291,11 @@ export class AxiosService implements OnModuleInit {
             url: GetUserByShortUuidCommand.url(encodeURIComponent(shortUuid)),
             headers: { [REMNAWAVE_REAL_IP_HEADER]: clientIp },
         });
-        return GetUserByShortUuidCommand.ResponseSchema.parse(response.data).response;
+        return aggregationUserResponseSchema.parse(response.data).response;
     }
 
     public async getUsersByTelegramId(clientIp: string, telegramId: number) {
-        const users: GetUserByShortUuidCommand.Response['response'][] = [];
+        const users: AggregationUser[] = [];
         const cursors = new Set<string>();
         let cursor: string | undefined;
         do {
@@ -300,7 +305,7 @@ export class AxiosService implements OnModuleInit {
                 params: { telegramId: String(telegramId), size: 250, cursor },
                 headers: { [REMNAWAVE_REAL_IP_HEADER]: clientIp },
             });
-            const page = GetUsersStreamCommand.ResponseSchema.parse(response.data).response;
+            const page = aggregationUsersPageSchema.parse(response.data).response;
             // Never trust a server-side filter alone when joining credentials.
             users.push(...page.users.filter((user) => user.telegramId === telegramId));
             if (!page.hasMore) return users;
@@ -319,6 +324,7 @@ export class AxiosService implements OnModuleInit {
         headers: NodeJS.Dict<string | string[]>,
         withClientType: boolean = false,
         clientType?: TRequestTemplateTypeKeys,
+        throwOnError: boolean = false,
     ): Promise<{
         subscription: Buffer;
         headers: RawAxiosResponseHeaders;
@@ -352,6 +358,7 @@ export class AxiosService implements OnModuleInit {
                 ),
             };
         } catch (error) {
+            if (throwOnError) throw error;
             if (error instanceof AxiosError) {
                 if (error.response) {
                     if (error.response.status === 404) {
