@@ -1,6 +1,6 @@
 services:
   remnawave-subscription-page:
-    image: remnawave/subscription-page:latest
+    image: 1owe1/rw-custom-subscription-page:${IMAGE_TAG:-latest}
     container_name: remnawave-subscription-page
     hostname: remnawave-subscription-page
     restart: always

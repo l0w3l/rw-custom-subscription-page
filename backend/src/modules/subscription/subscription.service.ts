@@ -7,11 +7,16 @@ import { TRequestTemplateTypeKeys } from '@remnawave/backend-contract';
 
 import { AxiosService } from '@common/axios/axios.service';
 
+import { SubscriptionAggregationService } from './subscription-aggregation.service';
+
 @Injectable()
 export class SubscriptionService {
     private readonly logger = new Logger(SubscriptionService.name);
 
-    constructor(private readonly axiosService: AxiosService) {}
+    constructor(
+        private readonly axiosService: AxiosService,
+        private readonly aggregationService: SubscriptionAggregationService,
+    ) {}
 
     public async serveSubscriptionPage(
         clientIp: string,
@@ -21,7 +26,7 @@ export class SubscriptionService {
         clientType?: TRequestTemplateTypeKeys,
     ): Promise<void> {
         try {
-            const subscriptionDataResponse = await this.axiosService.getSubscription(
+            let subscriptionDataResponse = await this.axiosService.getSubscription(
                 clientIp,
                 shortUuid,
                 req.headers,
@@ -33,6 +38,14 @@ export class SubscriptionService {
                 res.socket?.destroy();
                 return;
             }
+
+            subscriptionDataResponse = await this.aggregationService.aggregate(
+                subscriptionDataResponse,
+                clientIp,
+                shortUuid,
+                req.headers,
+                clientType,
+            );
 
             if (subscriptionDataResponse.headers) {
                 res.set(subscriptionDataResponse.headers);

@@ -1,0 +1,14 @@
+.git
+.github
+.agents
+.codex
+.vscode
+**/node_modules
+**/dist
+**/.env
+**/.env.*
+**/*.log
+**/*.tsbuildinfo
+**/coverage
+**/.cache
+frontend/public/assets/.app-config-v2.json

@@ -13,6 +13,8 @@ import {
     GetSubpageConfigCommand,
     GetSubpageConfigsCommand,
     GetUserByUsernameCommand,
+    GetUserByShortUuidCommand,
+    GetUsersStreamCommand,
     REMNAWAVE_REAL_IP_HEADER,
     TRequestTemplateTypeKeys,
 } from '@remnawave/backend-contract';
@@ -276,6 +278,39 @@ export class AxiosService implements OnModuleInit {
             this.logger.error('Error in GetSubpageConfig Request:', error);
             return { isOk: false };
         }
+    }
+
+    public async getUserByShortUuid(clientIp: string, shortUuid: string) {
+        const response = await this.axiosInstance.request<GetUserByShortUuidCommand.Response>({
+            method: GetUserByShortUuidCommand.endpointDetails.REQUEST_METHOD,
+            url: GetUserByShortUuidCommand.url(encodeURIComponent(shortUuid)),
+            headers: { [REMNAWAVE_REAL_IP_HEADER]: clientIp },
+        });
+        return GetUserByShortUuidCommand.ResponseSchema.parse(response.data).response;
+    }
+
+    public async getUsersByTelegramId(clientIp: string, telegramId: number) {
+        const users: GetUserByShortUuidCommand.Response['response'][] = [];
+        const cursors = new Set<string>();
+        let cursor: string | undefined;
+        do {
+            const response = await this.axiosInstance.request<GetUsersStreamCommand.Response>({
+                method: GetUsersStreamCommand.endpointDetails.REQUEST_METHOD,
+                url: GetUsersStreamCommand.url,
+                params: { telegramId: String(telegramId), size: 250, cursor },
+                headers: { [REMNAWAVE_REAL_IP_HEADER]: clientIp },
+            });
+            const page = GetUsersStreamCommand.ResponseSchema.parse(response.data).response;
+            // Never trust a server-side filter alone when joining credentials.
+            users.push(...page.users.filter((user) => user.telegramId === telegramId));
+            if (!page.hasMore) return users;
+            if (!page.nextCursor || cursors.has(page.nextCursor)) {
+                throw new Error('Invalid user pagination cursor');
+            }
+            cursors.add(page.nextCursor);
+            cursor = page.nextCursor;
+        } while (cursors.size < 100);
+        throw new Error('User pagination limit exceeded');
     }
 
     public async getSubscription(

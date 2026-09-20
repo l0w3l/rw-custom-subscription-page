@@ -1,11 +1,19 @@
+FROM node:24.18-trixie-slim AS frontend-build
+WORKDIR /opt/frontend
+COPY frontend/package*.json ./
+RUN npm ci --no-audit --no-fund
+COPY frontend/ .
+RUN npm run start:build
+
 FROM node:24.18-trixie-slim AS backend-build
 WORKDIR /opt/app
+ENV NODE_ENV=production
 
 COPY backend/package*.json ./
 COPY backend/tsconfig.json ./
 COPY backend/tsconfig.build.json ./
 
-RUN npm ci --prefer-offline --no-audit --no-fund
+RUN npm ci --include=dev --prefer-offline --no-audit --no-fund
 
 COPY backend/ .
 
@@ -15,20 +23,21 @@ RUN npm run build \
 FROM node:24.18-trixie-slim
 WORKDIR /opt/app
 
-LABEL org.opencontainers.image.title="Remnawave Subscription Page"
-LABEL org.opencontainers.image.description="Remnawave Subscription Page"
-LABEL org.opencontainers.image.url="https://github.com/remnawave/subscription-page"
-LABEL org.opencontainers.image.source="https://github.com/remnawave/subscription-page"
-LABEL org.opencontainers.image.vendor="Remnawave"
+LABEL org.opencontainers.image.title="RW Custom Subscription Page"
+LABEL org.opencontainers.image.description="Remnawave subscription page with Telegram ID aggregation for Xray and Mihomo"
+LABEL org.opencontainers.image.url="https://github.com/l0w3l/rw-custom-subscription-page"
+LABEL org.opencontainers.image.source="https://github.com/l0w3l/rw-custom-subscription-page"
+LABEL org.opencontainers.image.vendor="1owe1"
 LABEL org.opencontainers.image.licenses="AGPL-3.0"
-LABEL org.opencontainers.image.documentation="https://docs.rw"
+LABEL org.opencontainers.image.documentation="https://github.com/l0w3l/rw-custom-subscription-page/blob/main/docs/docker-publishing.md"
 
 
 RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
 
 COPY --from=backend-build /opt/app/dist ./dist
 
-COPY frontend/dist/ ./frontend/
+COPY --from=frontend-build /opt/frontend/dist ./frontend/
+COPY LICENCE ./LICENCE
 COPY backend/ecosystem.config.js ./
 COPY backend/docker-entrypoint.sh ./
 
