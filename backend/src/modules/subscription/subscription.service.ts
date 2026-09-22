@@ -7,6 +7,8 @@ import { TRequestTemplateTypeKeys } from '@remnawave/backend-contract';
 
 import { AxiosService } from '@common/axios/axios.service';
 
+import { describeAggregationError } from './aggregation-error';
+import { applyHostPriorities } from './host-priority';
 import { SubscriptionAggregationService } from './subscription-aggregation.service';
 
 @Injectable()
@@ -46,6 +48,34 @@ export class SubscriptionService {
                 req.headers,
                 clientType,
             );
+
+            try {
+                const subscription = applyHostPriorities(subscriptionDataResponse.subscription);
+                if (subscription !== subscriptionDataResponse.subscription) {
+                    const headers = { ...subscriptionDataResponse.headers };
+                    for (const key of Object.keys(headers)) {
+                        if (
+                            [
+                                'content-length',
+                                'content-encoding',
+                                'etag',
+                                'last-modified',
+                                'content-md5',
+                                'digest',
+                            ].includes(key.toLowerCase())
+                        ) {
+                            delete headers[key];
+                        }
+                    }
+                    headers['cache-control'] = 'no-store';
+                    subscriptionDataResponse = { subscription, headers };
+                }
+            } catch (error) {
+                this.logger.warn(
+                    'Host priority processing failed; preserving subscription ' +
+                        JSON.stringify(describeAggregationError(error)),
+                );
+            }
 
             if (subscriptionDataResponse.headers) {
                 res.set(subscriptionDataResponse.headers);
