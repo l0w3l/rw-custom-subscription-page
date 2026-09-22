@@ -237,16 +237,11 @@ export function mergeSubscriptionBodies(bodies: Buffer[], format: SubscriptionFo
     }
     if (format === 'xray-json') {
         const result: ObjectValue[] = [];
-        const seen = new Set<string>();
         for (const body of bodies) {
             const parsed = JSON.parse(body.toString('utf8'));
-            for (const config of records(Array.isArray(parsed) ? parsed : [parsed])) {
-                const key = identity(config.outbounds);
-                if (!seen.has(key)) {
-                    seen.add(key);
-                    result.push(config);
-                }
-            }
+            // Each profile is a complete configuration with its own routing and chains.
+            // Shared outbounds do not make profiles interchangeable; preserve every profile.
+            result.push(...records(Array.isArray(parsed) ? parsed : [parsed]));
         }
         return Buffer.from(JSON.stringify(result));
     }

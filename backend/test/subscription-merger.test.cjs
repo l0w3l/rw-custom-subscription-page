@@ -22,14 +22,35 @@ const xray = (address, id, remarks = address) => ({
     ],
 });
 
-test('Xray keeps first credentials, whole templates and distinct endpoints', () => {
+test('Xray preserves all whole profiles and their own credentials', () => {
     const first = xray('a.example', 'first', 'same');
     const second = xray('a.example', 'second', 'other name');
     const extra = xray('b.example', 'second', 'same');
     const result = JSON.parse(
         mergeSubscriptionBodies([buf([first]), buf([second, extra])], 'xray-json'),
     );
-    assert.deepEqual(result, [first, extra]);
+    assert.deepEqual(result, [first, second, extra]);
+});
+
+test('Xray preserves shared outbounds, distinct routing, chains and repeated profiles', () => {
+    const first = xray('a.example', 'first');
+    first.outbounds.push({
+        ...structuredClone(first.outbounds[0]),
+        tag: 'exit',
+        proxySettings: { tag: 'proxy' },
+    });
+    first.routing = {
+        balancers: [{ tag: 'balance', selector: ['proxy', 'exit'] }],
+        rules: [{ type: 'field', network: 'tcp', balancerTag: 'balance' }],
+    };
+    const second = structuredClone(first);
+    second.dns = { servers: ['9.9.9.9'] };
+    second.routing = { rules: [{ type: 'field', network: 'tcp', outboundTag: 'exit' }] };
+    const original = structuredClone([first, second, first]);
+    const result = JSON.parse(
+        mergeSubscriptionBodies([buf([first, second]), buf(first)], 'xray-json'),
+    );
+    assert.deepEqual(result, original);
 });
 
 test('Xray transport/flow variants remain separate', () => {

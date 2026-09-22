@@ -76,13 +76,14 @@ test('Xray sorts numerically and stably, removes markers and keeps each complete
     assert.deepEqual(JSON.parse(applyHostPriorities(json(single))), { ...single, remarks: 'One' });
 });
 
-test('host priority never overrides the subscription that wins deduplication', () => {
+test('host priority preserves every Xray profile with its own credentials', () => {
     const first = profile('[P50] First', 'same-host', 'primary-credentials');
     const second = profile('[P0] Second', 'same-host', 'secondary-credentials');
     const extra = profile('[P1] Extra', 'extra-host', 'secondary-credentials');
     const merged = mergeSubscriptionBodies([json([first]), json([second, extra])], 'xray-json');
     const result = JSON.parse(applyHostPriorities(merged));
     assert.deepEqual(result, [
+        { ...second, remarks: 'Second' },
         { ...extra, remarks: 'Extra' },
         { ...first, remarks: 'First' },
     ]);
